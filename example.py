@@ -353,8 +353,24 @@ def main():
     # ── Per-page: QR, footer line, timestamp, page numbers ──────
     iso_ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     total_pages = len(doc.pages)
+    import math
+    wm_angle = math.degrees(math.atan2(doc.A4H, doc.A4W))
     for pg_idx in range(total_pages):
         cmds = doc.pages[pg_idx]
+
+        # DRAFT watermark — behind all content
+        wm = [
+            "gsave",
+            "0.90 setgray",
+            f"/Helvetica_Bold_Cyr findfont 140 scalefont setfont",
+            f"{doc.A4W / 2} {doc.A4H / 2 - 40} translate",
+            f"{wm_angle} rotate",
+            "0 0 moveto (DRAFT) dup stringwidth pop 2 div neg 0 rmoveto show",
+            "grestore",
+        ]
+        for i, cmd in enumerate(wm):
+            cmds.insert(i, cmd)
+
         if not any("PAGE_NUMBER_PLACEHOLDER" in c for c in cmds):
             cmds.append(f"% PAGE_NUMBER_PLACEHOLDER {MB + 2} right")
 
