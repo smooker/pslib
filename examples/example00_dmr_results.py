@@ -6,7 +6,6 @@ Demonstrates pslib capabilities:
   - Multiple tables with custom column alignment and widths
   - Bulleted notes section
   - Per-page QR code with RSC reference and SC logo
-  - DRAFT watermark overlay
   - Footer with ISO timestamp and page numbers
   - Goertzel (1958) — single-bin DFT method attribution
 
@@ -16,7 +15,6 @@ Output: dmr_results.ps + dmr_results.pdf
 import os
 import random
 import string
-import math
 from datetime import datetime
 
 import sys
@@ -208,24 +206,11 @@ def main():
         doc.text(ML + 5, cy, "\u2022 " + note)
         cy -= 9
 
-    # ── Per-page overlays: QR, footer, watermark ───────────────
+    # ── Per-page overlays: QR, footer ─────────────────────────
     total_pages = len(doc.pages)
-    wm_angle = math.degrees(math.atan2(doc.A4H, doc.A4W))
 
     for pg_idx in range(total_pages):
         cmds = doc.pages[pg_idx]
-
-        # DRAFT watermark
-        wm = [
-            "gsave", "0.90 setgray",
-            f"/Helvetica_Bold_Cyr findfont 140 scalefont setfont",
-            f"{doc.A4W / 2} {doc.A4H / 2 - 40} translate",
-            f"{wm_angle} rotate",
-            "0 0 moveto (DRAFT) dup stringwidth pop 2 div neg 0 rmoveto show",
-            "grestore",
-        ]
-        for i, cmd in enumerate(wm):
-            cmds.insert(i, cmd)
 
         # Footer
         footer_y = MB + FOOTER_H - 4

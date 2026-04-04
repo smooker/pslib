@@ -7,7 +7,6 @@ Demonstrates pslib capabilities:
   - Section numbering (01 --, 02 --, ...)
   - Code blocks with gray background
   - Per-page QR code with RSC reference and SC logo
-  - DRAFT watermark overlay
   - Footer with ISO timestamp and page numbers
 
 Usage:
@@ -19,7 +18,6 @@ Output: example01.ps + example01.pdf
 
 import os
 import re
-import math
 import random
 import string
 from datetime import datetime
@@ -489,8 +487,6 @@ def main():
 
     # ── Per-page overlays ──────────────────────────────────────
     total_pages = len(doc.pages)
-    wm_angle = math.degrees(math.atan2(doc.A4H, doc.A4W))
-
     # RSC font size
     doc.font("Courier-Bold", 6)
     date_w = doc.string_width(iso_date)
@@ -500,18 +496,6 @@ def main():
 
     for pg_idx in range(total_pages):
         cmds = doc.pages[pg_idx]
-
-        # DRAFT watermark
-        wm = [
-            "gsave", "0.92 setgray",
-            "/Helvetica_Bold_Cyr findfont 140 scalefont setfont",
-            f"{doc.A4W / 2} {doc.A4H / 2 - 40} translate",
-            f"{wm_angle} rotate",
-            "0 0 moveto (DRAFT) dup stringwidth pop 2 div neg 0 rmoveto show",
-            "grestore",
-        ]
-        for i, cmd in enumerate(wm):
-            cmds.insert(i, cmd)
 
         # Footer
         footer_y = MB + FOOTER_H - 4
