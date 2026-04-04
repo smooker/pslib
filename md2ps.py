@@ -257,28 +257,68 @@ def measure_block(block, doc, cfg):
 
 
 def measure_section(blocks, start_idx, doc, cfg):
-    """Measure heading + ALL content until next heading of same/higher level.
+    """Measure heading + content recursively.
 
-    If a section doesn't fit on the current page, the entire section moves
-    to the next page. Sections are never split (unless taller than a full page).
+    Recursive strategy:
+    - Measure heading block
+    - Add content blocks until next heading of same/higher level
+    - When hitting a sub-heading (h3 inside h2), recursively measure that subsection
+    - If adding the next subsection would exceed page height, stop — keep what fits
+    - Cap at page height (sections taller than a page are allowed to split)
+
+    This ensures: short subsections stay with their parent heading,
+    but large sections can flow across pages.
     """
     block = blocks[start_idx]
     total = measure_block(block, doc, cfg)
     level = block.kind  # 'h2', 'h3', 'h4'
-
-    for j in range(start_idx + 1, len(blocks)):
-        bj = blocks[j]
-        # Stop at heading of same or higher level
-        if bj.kind == 'h2':
-            break
-        if level == 'h3' and bj.kind in ('h2', 'h3'):
-            break
-        if level == 'h4' and bj.kind in ('h2', 'h3', 'h4'):
-            break
-        total += measure_block(bj, doc, cfg)
-
-    # Cap at page height — if section is taller than 1 page, allow split
     page_h = cfg.content_top - cfg.bottom_limit
+
+    # Heading hierarchy: h2 > h3 > h4
+    def is_same_or_higher(kind):
+        if level == 'h2':
+            return kind == 'h2'
+        if level == 'h3':
+            return kind in ('h2', 'h3')
+        if level == 'h4':
+            return kind in ('h2', 'h3', 'h4')
+        return kind in ('h2', 'h3', 'h4', 'title')
+
+    def is_sub_heading(kind):
+        if level == 'h2':
+            return kind in ('h3', 'h4')
+        if level == 'h3':
+            return kind == 'h4'
+        return False
+
+    j = start_idx + 1
+    while j < len(blocks):
+        bj = blocks[j]
+
+        # Stop at heading of same or higher level
+        if is_same_or_higher(bj.kind):
+            break
+
+        # Sub-heading: recursively measure entire subsection
+        if is_sub_heading(bj.kind):
+            sub_h = measure_section(blocks, j, doc, cfg)
+            # If adding this subsection would exceed page, stop here
+            if total + sub_h > page_h and total > measure_block(block, doc, cfg) + 20:
+                break
+            total += sub_h
+            # Skip past the subsection content
+            j += 1
+            while j < len(blocks):
+                bk = blocks[j]
+                if is_same_or_higher(bk.kind) or is_sub_heading(bk.kind):
+                    break
+                j += 1
+            continue
+
+        # Regular content block
+        total += measure_block(bj, doc, cfg)
+        j += 1
+
     return min(total, page_h)
 
 
