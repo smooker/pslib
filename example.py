@@ -355,18 +355,6 @@ def main():
     total_pages = len(doc.pages)
     for pg_idx in range(total_pages):
         cmds = doc.pages[pg_idx]
-
-        # DRAFT watermark — large, diagonal, behind content (first in page)
-        import math
-        angle = math.degrees(math.atan2(doc.A4H, doc.A4W))
-        cmds.insert(0, "gsave")
-        cmds.insert(1, "0.90 setgray")
-        cmds.insert(2, f"/Helvetica-Bold 140 selectfont")
-        cmds.insert(3, f"{doc.A4W / 2} {doc.A4H / 2 - 40} moveto")
-        cmds.insert(4, f"gsave {angle} rotate")
-        cmds.insert(5, "(DRAFT) dup stringwidth pop 2 div neg 0 rmoveto show grestore")
-        cmds.insert(6, "grestore")
-
         if not any("PAGE_NUMBER_PLACEHOLDER" in c for c in cmds):
             cmds.append(f"% PAGE_NUMBER_PLACEHOLDER {MB + 2} right")
 
