@@ -1,77 +1,28 @@
 #!/usr/bin/python3
-"""example01_dmr_howto.py — Markdown to PDF converter via pslib.
+"""example01_dmr_howto.py — Markdown to PDF via md2ps + pslib.
 
-Demonstrates pslib capabilities:
-  - Markdown parser (headings, bullets, numbered lists, code blocks, tables)
-  - Multi-page document with automatic page breaks
-  - Section numbering (01 --, 02 --, ...)
-  - Code blocks with gray background
-  - Per-page QR code with RSC reference and SC logo
-  - Footer with ISO timestamp and page numbers
+Demonstrates md2ps module: parse markdown, measure blocks, render with
+automatic page breaks, QR code, footer. Uses built-in DMR HOWTO content
+or reads from file argument.
 
 Usage:
     python3 example01_dmr_howto.py [input.md]
 
-If no input file given, uses a built-in DMR technical document.
 Output: example01.ps + example01.pdf
 """
 
 import os
-import re
-import random
-import string
+import sys
 from datetime import datetime
 
-import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from pslib import PSDoc
+from md2ps import (parse_markdown, measure_block, measure_section,
+                   render_block, apply_overlays, generate_rsc, MdConfig)
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_PS = os.path.join(DIR, "example01.ps")
 OUT_PDF = os.path.join(DIR, "example01.pdf")
-
-# SCteam standard margins
-ML = 42    # 15mm left (binding)
-MR = 23    # 8mm right
-MT = 36    # 12.7mm top (gripper)
-MB = 36    # 12.7mm bottom (gripper)
-QR_ZONE = 60
-FOOTER_H = 20
-
-# Font sizes
-TITLE_SZ = 16
-H2_SZ = 12
-H3_SZ = 10
-H4_SZ = 9
-BODY_SZ = 8
-CODE_SZ = 7
-BULLET_SZ = 8
-TABLE_HDR_SZ = 8
-TABLE_BODY_SZ = 7
-
-LINE_H = 11
-CODE_LINE_H = 9
-SECTION_GAP = 6
-SUBSECTION_GAP = 4
-
-CONTENT_W = 595 - ML - MR
-
-
-def generate_rsc():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-
-
-def qr_matrix(data):
-    try:
-        import qrcode
-        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H,
-                           box_size=1, border=0)
-        qr.add_data(data)
-        qr.make()
-        return qr.get_matrix()
-    except ImportError:
-        return None
-
 
 # ── Built-in demo content ──────────────────────────────────────
 
@@ -132,7 +83,7 @@ BUILTIN_MD = r"""# DMR с HackRF + GnuRadio — Практическо ръко�
 ### DMR Frame структура (60ms)
 ```
 |--- Slot 1 (30ms) ---|--- Slot 2 (30ms) ---|
-|  CACH | Payload | CACH | Payload           |
+|  CACH | Payload | CACH | Payload          |
 ```
 
 Всеки burst е 264 бита (54 + 12 + 54 + SYNC/EMB + 54 + 12 + 54)
@@ -221,86 +172,9 @@ LSB = амплитуда (0 = inner ±648, 1 = outer ±1944)
 """
 
 
-def parse_markdown(text):
-    """Parse markdown text into structured blocks."""
-    lines = text.split('\n')
-    blocks = []
-    i = 0
-    while i < len(lines):
-        line = lines[i].rstrip()
-        stripped = line.strip()
-
-        if not stripped:
-            blocks.append(('blank', ''))
-            i += 1
-            continue
-
-        if stripped.startswith('#### '):
-            blocks.append(('h4', stripped[5:].strip()))
-            i += 1; continue
-        if stripped.startswith('### '):
-            blocks.append(('h3', stripped[4:].strip()))
-            i += 1; continue
-        if stripped.startswith('## '):
-            blocks.append(('h2', stripped[3:].strip()))
-            i += 1; continue
-        if stripped.startswith('# '):
-            blocks.append(('title', stripped[2:].strip()))
-            i += 1; continue
-
-        if stripped == '---':
-            blocks.append(('hr', ''))
-            i += 1; continue
-
-        if stripped.startswith('```'):
-            code_lines = []
-            i += 1
-            while i < len(lines) and not lines[i].strip().startswith('```'):
-                code_lines.append(lines[i].rstrip())
-                i += 1
-            i += 1
-            blocks.append(('code', code_lines))
-            continue
-
-        if stripped.startswith('|') and '|' in stripped[1:]:
-            table_lines = []
-            while i < len(lines) and lines[i].strip().startswith('|'):
-                table_lines.append(lines[i].strip())
-                i += 1
-            headers = [c.strip() for c in table_lines[0].split('|')[1:-1]]
-            rows = []
-            for tl in table_lines[2:]:
-                cells = [c.strip().replace('**', '')
-                         for c in tl.split('|')[1:-1]]
-                rows.append(cells)
-            blocks.append(('table', (headers, rows)))
-            continue
-
-        if stripped.startswith('- ') or stripped.startswith('* '):
-            blocks.append(('bullet', stripped[2:].strip()))
-            i += 1; continue
-
-        m = re.match(r'^(\d+)\.\s+(.+)', stripped)
-        if m:
-            blocks.append(('numbered', (m.group(1), m.group(2).strip())))
-            i += 1; continue
-
-        blocks.append(('text', stripped))
-        i += 1
-
-    return blocks
-
-
-def clean_md(text):
-    """Remove markdown bold/italic/code markers."""
-    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
-    text = re.sub(r'\*(.+?)\*', r'\1', text)
-    text = re.sub(r'`(.+?)`', r'\1', text)
-    text = re.sub(r'~~(.+?)~~', r'\1', text)
-    return text
-
-
 def main():
+    cfg = MdConfig()
+
     # Read markdown source
     md_file = sys.argv[1] if len(sys.argv) > 1 else None
     if md_file and os.path.isfile(md_file):
@@ -314,267 +188,47 @@ def main():
     blocks = parse_markdown(md_text)
 
     doc = PSDoc(OUT_PS, title="DMR HOWTO",
-                margin=ML, margin_top=MT + QR_ZONE,
-                margin_bottom=MB + FOOTER_H,
-                margin_right=MR)
+                margin=cfg.margin_left,
+                margin_top=cfg.margin_top + cfg.qr_zone,
+                margin_bottom=cfg.margin_bottom + cfg.footer_h,
+                margin_right=cfg.margin_right)
 
-    rsc = generate_rsc()
-    iso_date = datetime.now().strftime("%Y-%m-%dT%H:%M")
-    iso_ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    bottom_limit = MB + FOOTER_H + 10
-
-    cy = 842 - MT - QR_ZONE
+    x = cfg.margin_left
+    cw = cfg.content_width
+    page_top = cfg.content_top
+    bottom = cfg.bottom_limit
+    cy = page_top
     section_num = 0
 
-    for block_type, content in blocks:
-
-        if block_type == 'title':
-            doc.font("Helvetica-Bold", TITLE_SZ)
-            doc.text(doc.A4W / 2, cy, clean_md(content), align="center")
-            cy -= TITLE_SZ + 4
-            doc.font("Helvetica", 8)
-            doc.text(doc.A4W / 2, cy, "LZ1CCM / smooker / SCteam", align="center")
-            cy -= 10
-            doc.font("Helvetica", 7)
-            doc.text(doc.A4W / 2, cy, iso_date, align="center")
-            cy -= 12
-            doc.hr(cy, ML, doc.A4W - MR)
-            cy -= SECTION_GAP
-            continue
-
-        if block_type == 'h2':
+    for i, block in enumerate(blocks):
+        if block.kind == 'h2':
             section_num += 1
-            # Look ahead: count lines until next h2 or end
-            lookahead = 0
-            idx = blocks.index((block_type, content))
-            for j in range(idx + 1, len(blocks)):
-                bt, _ = blocks[j]
-                if bt == 'h2':
-                    break
-                if bt in ('text', 'bullet', 'numbered', 'todo'):
-                    lookahead += 1
-                elif bt == 'code':
-                    lookahead += len(_) + 1
-                elif bt == 'table':
-                    lookahead += len(_[1]) + 2
-                elif bt in ('h3', 'h4'):
-                    lookahead += 2
-            need = H2_SZ + 18 + LINE_H * min(lookahead, 6)
-            if cy - need < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            cy -= SECTION_GAP
-            doc.font("Helvetica-Bold", H2_SZ)
-            label = f"{section_num:02d}  {clean_md(content)}"
-            tw = doc.string_width(label)
-            # Box height: font size + padding
-            box_h = H2_SZ + 6
-            box_y = cy - box_h
-            # Line across full width at vertical center of box
-            line_y = box_y + box_h / 2
-            doc.hr(line_y, ML, doc.A4W - MR)
-            # White rect behind text (erases line under text)
-            doc.rect(ML, box_y, tw + 8, box_h,
-                     fill=True, gray=1.0, stroke=False)
-            # Black border around box
-            doc.rect(ML, box_y, tw + 8, box_h,
-                     fill=False, gray=0, stroke=True, linewidth=0.5)
-            doc.setgray(0)
-            # Text vertically centered in box
-            doc.font("Helvetica-Bold", H2_SZ)
-            text_y = box_y + (box_h - H2_SZ) / 2 + H2_SZ * 0.2
-            doc.text(ML + 4, text_y, label)
-            cy = box_y - 10
-            continue
 
-        if block_type == 'h3':
-            # Orphan prevention: h3 + at least 4 lines must fit
-            if cy - H3_SZ - LINE_H * 4 < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            cy -= SUBSECTION_GAP
-            doc.font("Helvetica-Bold", H3_SZ)
-            doc.text(ML + 5, cy, clean_md(content))
-            cy -= H3_SZ + 3
-            continue
+        # Measure
+        needed = measure_block(block, doc, cfg)
+        if block.kind in ('h2', 'h3', 'h4'):
+            needed = measure_section(blocks, i, doc, cfg)
 
-        if block_type == 'h4':
-            if cy - H4_SZ - LINE_H * 2 < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            cy -= 3
-            doc.font("Helvetica-Bold", H4_SZ)
-            doc.text(ML + 10, cy, clean_md(content))
-            cy -= H4_SZ + 2
-            continue
+        # Page break if needed
+        if cy - needed < bottom:
+            doc.new_page()
+            cy = page_top
 
-        if block_type == 'text':
-            text = clean_md(content)
-            doc.font("Helvetica", BODY_SZ)
-            lines = doc._wrap_text(text, CONTENT_W)
-            for line in lines:
-                if cy < bottom_limit:
-                    doc.new_page()
-                    cy = 842 - MT - QR_ZONE
-                doc.text(ML, cy, line)
-                cy -= LINE_H
-            continue
+        # Render
+        cy = render_block(block, doc, cfg, x, cy, cw, section_num)
 
-        if block_type == 'bullet':
-            text = clean_md(content)
-            if cy < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            doc.font("Helvetica", BULLET_SZ)
-            lines = doc._wrap_text(text, CONTENT_W - 12)
-            doc.text(ML + 8, cy, "\u2022 " + lines[0])
-            cy -= LINE_H
-            for extra in lines[1:]:
-                doc.text(ML + 14, cy, extra)
-                cy -= LINE_H
-            continue
-
-        if block_type == 'numbered':
-            num, text = content
-            text = clean_md(text)
-            if cy < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            doc.font("Helvetica-Bold", BULLET_SZ)
-            doc.text(ML + 5, cy, f"{num}.")
-            doc.font("Helvetica", BULLET_SZ)
-            lines = doc._wrap_text(text, CONTENT_W - 20)
-            doc.text(ML + 18, cy, lines[0])
-            cy -= LINE_H
-            for extra in lines[1:]:
-                doc.text(ML + 18, cy, extra)
-                cy -= LINE_H
-            continue
-
-        if block_type == 'code':
-            code_lines = content
-            if cy - CODE_LINE_H * 3 < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            cy -= 2
-            # Count lines that fit
-            avail = int((cy - bottom_limit) / CODE_LINE_H)
-            n_lines = min(len(code_lines), max(avail, 2))
-            bg_h = n_lines * CODE_LINE_H + 4
-            doc.rect(ML, cy - bg_h, CONTENT_W, bg_h,
-                     fill=True, gray=0.94, stroke=True, linewidth=0.3)
-            doc.setgray(0)
-            doc.font("Courier", CODE_SZ)
-            code_y = cy - CODE_LINE_H + 1
-            for cl in code_lines:
-                if code_y < bottom_limit:
-                    doc.new_page()
-                    cy = 842 - MT - QR_ZONE
-                    code_y = cy - CODE_LINE_H + 1
-                    remaining_cl = code_lines[code_lines.index(cl):]
-                    bg_h2 = min(len(remaining_cl) * CODE_LINE_H + 4,
-                                cy - bottom_limit)
-                    doc.rect(ML, cy - bg_h2, CONTENT_W, bg_h2,
-                             fill=True, gray=0.94, stroke=True, linewidth=0.3)
-                    doc.setgray(0)
-                    doc.font("Courier", CODE_SZ)
-                if len(cl) > 90:
-                    cl = cl[:87] + "..."
-                doc.text(ML + 4, code_y, cl)
-                code_y -= CODE_LINE_H
-            cy = code_y - 2
-            continue
-
-        if block_type == 'table':
-            headers, rows = content
-            if cy - TABLE_HDR_SZ - 13 * 3 < bottom_limit:
-                doc.new_page()
-                cy = 842 - MT - QR_ZONE
-            cy -= 4
-            cy = doc.table(ML, cy, headers, rows,
-                           font_name="Helvetica",
-                           header_size=TABLE_HDR_SZ,
-                           body_size=TABLE_BODY_SZ,
-                           row_height=13,
-                           col_align=["left"] * len(headers))
-            cy -= 6
-            continue
-
-        if block_type == 'hr':
-            # Skip — h2 sections already draw their own line
-            cy -= 2
-            continue
-
-        if block_type == 'blank':
-            cy -= 1  # minimal spacing for blanks
-            continue
-
-    # ── Per-page overlays ──────────────────────────────────────
-    total_pages = len(doc.pages)
-    # RSC font size
-    doc.font("Courier-Bold", 6)
-    date_w = doc.string_width(iso_date)
-    doc.font("Courier-Bold", 7)
-    rsc_w = doc.string_width(f"RSC: {rsc}")
-    rsc_sz = 7 * date_w / rsc_w if rsc_w > 0 else 7
-
-    for pg_idx in range(total_pages):
-        cmds = doc.pages[pg_idx]
-
-        # Footer
-        footer_y = MB + FOOTER_H - 4
-        cmds.append(f"0.3 setlinewidth {ML} {footer_y} moveto "
-                    f"{doc.A4W - MR - ML} 0 rlineto stroke")
-        ts_esc = doc._escape_ps(iso_ts)
-        cmds.append(f"/Helvetica_Cyr 6 selectfont")
-        cmds.append(f"{ML} {MB} moveto ({ts_esc}) show")
-        pn_esc = doc._escape_ps(f"p. {pg_idx + 1}/{total_pages}")
-        cmds.append(f"({pn_esc}) stringwidth pop neg "
-                    f"{doc.A4W - MR} add {MB} moveto ({pn_esc}) show")
-
-        # QR code top-right
-        pg_matrix = qr_matrix(f"RSC:{rsc}/{pg_idx + 1}")
-        if pg_matrix:
-            qr_mod = 1.8
-            qr_sz = len(pg_matrix) * qr_mod
-            qr_px = doc.A4W - MR - qr_sz
-            qr_py = doc.A4H - MT
-            for r, row in enumerate(pg_matrix):
-                for c, black in enumerate(row):
-                    if black:
-                        px = qr_px + c * qr_mod
-                        py = qr_py - (r + 1) * qr_mod
-                        cmds.append(f"newpath {px} {py} moveto "
-                                    f"{qr_mod} 0 rlineto 0 {qr_mod} rlineto "
-                                    f"{qr_mod} neg 0 rlineto closepath fill")
-            cx = qr_px + qr_sz / 2
-            cy_c = qr_py - qr_sz / 2
-            lbl_sz = qr_mod * 3.5
-            radius = max(lbl_sz * 1.2 / 2, lbl_sz / 2) + 2.5
-            cmds.append(f"gsave 1 setgray newpath "
-                        f"{cx} {cy_c} {radius} 0 360 arc closepath fill grestore")
-            cmds.append("0 setgray")
-            sc_esc = doc._escape_ps("SC")
-            ty_sc = cy_c - lbl_sz * 0.35
-            cmds.append(f"/Helvetica_Bold_Cyr {lbl_sz} selectfont")
-            cmds.append(f"({sc_esc}) stringwidth pop 2 div neg "
-                        f"{cx} add {ty_sc} moveto ({sc_esc}) show")
-
-            lx = qr_px - 5
-            rsc_label = doc._escape_ps(f"RSC: {rsc}")
-            date_label = doc._escape_ps(iso_date)
-            cmds.append(f"/Courier_Bold_Cyr {rsc_sz} selectfont")
-            rsc_y = qr_py - rsc_sz
-            cmds.append(f"({rsc_label}) stringwidth pop neg "
-                        f"{lx} add {rsc_y} moveto ({rsc_label}) show")
-            cmds.append(f"/Courier_Bold_Cyr 6 selectfont")
-            cmds.append(f"({date_label}) stringwidth pop neg "
-                        f"{lx} add {rsc_y - 9} moveto ({date_label}) show")
+    # Overlays
+    rsc = generate_rsc()
+    now = datetime.now()
+    apply_overlays(doc, cfg, [
+        {'type': 'footer', 'timestamp': now.strftime("%Y-%m-%dT%H:%M:%S")},
+        {'type': 'qr', 'rsc': rsc, 'date': now.strftime("%Y-%m-%dT%H:%M")},
+    ])
 
     doc.save()
     pdf = doc.to_pdf(OUT_PDF)
     print(f"Generated: {pdf}")
-    print(f"Pages: {total_pages}")
+    print(f"Pages: {len(doc.pages)}")
 
 
 if __name__ == "__main__":

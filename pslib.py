@@ -552,6 +552,8 @@ dup 254 /afii10096 put % ю
 dup 255 /afii10097 put % я
 dup 168 /afii10023 put % Ё
 dup 184 /afii10071 put % ё
+dup 177 /plusminus put % ±
+dup 149 /bullet put % •
 def
 
 /ReEncodeFont { % /NewName /BaseName ReEncodeFont
