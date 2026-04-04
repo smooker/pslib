@@ -200,6 +200,8 @@ def main():
     cy = page_top
     section_num = 0
 
+    protected_until = 0  # block index until which page breaks are suppressed
+
     for i, block in enumerate(blocks):
         if block.kind == 'h2':
             section_num += 1
@@ -207,12 +209,14 @@ def main():
         # Measure
         needed = measure_block(block, doc, cfg)
         if block.kind in ('h2', 'h3', 'h4'):
-            needed = measure_section(blocks, i, doc, cfg)
+            needed, count = measure_section(blocks, i, doc, cfg)
+            protected_until = i + count  # protect all blocks in this section
 
-        # Page break if needed
-        if cy - needed < bottom:
-            doc.new_page()
-            cy = page_top
+        # Page break if needed (but not inside a protected section)
+        if i >= protected_until or block.kind in ('h2', 'h3', 'h4'):
+            if cy - needed < bottom:
+                doc.new_page()
+                cy = page_top
 
         # Render
         cy = render_block(block, doc, cfg, x, cy, cw, section_num)
