@@ -434,6 +434,32 @@ class PSDoc:
 
     # ── PS encoding ───────────────────────────────────────────────
 
+    # Unicode → ASCII fallback for chars outside CP1251
+    _UNICODE_FALLBACK = {
+        '\u2192': '->',   # →
+        '\u2190': '<-',   # ←
+        '\u2194': '<->',  # ↔
+        '\u2014': ' - ',  # — em dash
+        '\u2013': '-',    # – en dash
+        '\u2022': '*',    # • bullet
+        '\u00b1': '+-',   # ±
+        '\u00b7': '\\267',  # · middle dot
+        '\u2026': '...',  # …
+        '\u201c': '"',    # "
+        '\u201d': '"',    # "
+        '\u2018': "'",    # '
+        '\u2019': "'",    # '
+        '\u00ab': '<<',   # «
+        '\u00bb': '>>',   # »
+        '\u2264': '<=',   # ≤
+        '\u2265': '>=',   # ≥
+        '\u2260': '!=',   # ≠
+        '\u00d7': 'x',    # ×
+        '\u00f7': '/',    # ÷
+        '\u221e': 'inf',  # ∞
+        '\u2248': '~=',   # ≈
+    }
+
     @staticmethod
     def _escape_ps(txt):
         """Escape PS specials, encode Cyrillic as CP1251 octal."""
@@ -446,11 +472,15 @@ class PSDoc:
             elif ch == ')':
                 out.append('\\)')
             elif ord(ch) > 127:
-                try:
-                    for byte in ch.encode('cp1251'):
-                        out.append(f'\\{byte:03o}')
-                except UnicodeEncodeError:
-                    out.append('?')
+                # Check fallback table first
+                if ch in PSDoc._UNICODE_FALLBACK:
+                    out.append(PSDoc._UNICODE_FALLBACK[ch])
+                else:
+                    try:
+                        for byte in ch.encode('cp1251'):
+                            out.append(f'\\{byte:03o}')
+                    except UnicodeEncodeError:
+                        out.append('?')
             else:
                 out.append(ch)
         return ''.join(out)
