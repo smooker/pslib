@@ -344,7 +344,23 @@ def main():
 
         if block_type == 'h2':
             section_num += 1
-            if cy - H2_SZ - LINE_H * 3 < bottom_limit:
+            # Look ahead: count lines until next h2 or end
+            lookahead = 0
+            idx = blocks.index((block_type, content))
+            for j in range(idx + 1, len(blocks)):
+                bt, _ = blocks[j]
+                if bt == 'h2':
+                    break
+                if bt in ('text', 'bullet', 'numbered', 'todo'):
+                    lookahead += 1
+                elif bt == 'code':
+                    lookahead += len(_) + 1
+                elif bt == 'table':
+                    lookahead += len(_[1]) + 2
+                elif bt in ('h3', 'h4'):
+                    lookahead += 2
+            need = H2_SZ + 18 + LINE_H * min(lookahead, 6)
+            if cy - need < bottom_limit:
                 doc.new_page()
                 cy = 842 - MT - QR_ZONE
             cy -= SECTION_GAP
@@ -368,11 +384,12 @@ def main():
             doc.font("Helvetica-Bold", H2_SZ)
             text_y = box_y + (box_h - H2_SZ) / 2 + H2_SZ * 0.2
             doc.text(ML + 4, text_y, label)
-            cy = box_y - 8
+            cy = box_y - 10
             continue
 
         if block_type == 'h3':
-            if cy - H3_SZ - LINE_H * 2 < bottom_limit:
+            # Orphan prevention: h3 + at least 4 lines must fit
+            if cy - H3_SZ - LINE_H * 4 < bottom_limit:
                 doc.new_page()
                 cy = 842 - MT - QR_ZONE
             cy -= SUBSECTION_GAP

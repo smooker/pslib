@@ -441,8 +441,8 @@ class PSDoc:
         '\u2194': '<->',  # ↔
         '\u2014': ' - ',  # — em dash
         '\u2013': '-',    # – en dash
-        '\u2022': '*',    # • bullet
-        '\u00b1': '+-',   # ±
+        '\u2022': '\\225',  # • bullet (StandardEncoding position 149)
+        '\u00b1': '\\261',  # ± (StandardEncoding position 177, survives CP1251 re-encode)
         '\u00b7': '\\267',  # · middle dot
         '\u2026': '...',  # …
         '\u201c': '"',    # "
