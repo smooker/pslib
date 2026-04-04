@@ -348,20 +348,27 @@ def main():
                 doc.new_page()
                 cy = 842 - MT - QR_ZONE
             cy -= SECTION_GAP
-            # Line across full width
-            line_y = cy - H2_SZ * 0.3
-            doc.hr(line_y, ML, doc.A4W - MR)
-            # White rect behind text, then text on top of line
             doc.font("Helvetica-Bold", H2_SZ)
-            label = f"{section_num:02d} -- {clean_md(content)}"
+            label = f"{section_num:02d}  {clean_md(content)}"
             tw = doc.string_width(label)
-            # White background: 4pt padding around text
-            doc.rect(ML - 1, line_y - H2_SZ * 0.4, tw + 8, H2_SZ + 4,
+            # Box height: font size + padding
+            box_h = H2_SZ + 6
+            box_y = cy - box_h
+            # Line across full width at vertical center of box
+            line_y = box_y + box_h / 2
+            doc.hr(line_y, ML, doc.A4W - MR)
+            # White rect behind text (erases line under text)
+            doc.rect(ML, box_y, tw + 8, box_h,
                      fill=True, gray=1.0, stroke=False)
+            # Black border around box
+            doc.rect(ML, box_y, tw + 8, box_h,
+                     fill=False, gray=0, stroke=True, linewidth=0.5)
             doc.setgray(0)
+            # Text vertically centered in box
             doc.font("Helvetica-Bold", H2_SZ)
-            doc.text(ML + 2, line_y - H2_SZ * 0.3, label)
-            cy = line_y - H2_SZ - 4
+            text_y = box_y + (box_h - H2_SZ) / 2 + H2_SZ * 0.2
+            doc.text(ML + 4, text_y, label)
+            cy = box_y - 8
             continue
 
         if block_type == 'h3':
