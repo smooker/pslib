@@ -630,17 +630,34 @@ def md_to_pdf(md_text, output_path, cfg=None, overlays=None, title="Document"):
     cy = page_top
     section_num = 0
 
+    page_h = cfg.content_top - cfg.bottom_limit
+    skip_until = -1
     for i, block in enumerate(blocks):
         if block.kind == 'h2':
             section_num += 1
 
         # Measure
-        needed = measure_block(block, doc, cfg)
-        if block.kind in ('h2', 'h3', 'h4'):
-            needed = measure_section(blocks, i, doc, cfg)
+        if block.kind in ('h2', 'h3', 'h4') and i >= skip_until:
+            height, block_count = measure_section(blocks, i, doc, cfg)
+            # Edge case: if the whole section is taller than a page, don't
+            # skip internal page-break checks — fall back to per-block mode.
+            # Otherwise skip_until would cause overflow under bottom_limit.
+            if height >= page_h:
+                needed = measure_block(block, doc, cfg)
+                check_break = True  # skip_until stays unchanged
+            else:
+                needed = height
+                skip_until = i + block_count
+                check_break = True
+        elif i < skip_until:
+            needed = measure_block(block, doc, cfg)
+            check_break = False
+        else:
+            needed = measure_block(block, doc, cfg)
+            check_break = True
 
         # Page break if needed
-        if cy - needed < bottom:
+        if check_break and cy - needed < bottom:
             doc.new_page()
             cy = page_top
 
