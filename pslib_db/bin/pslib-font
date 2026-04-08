@@ -93,6 +93,65 @@ elsif ($cmd eq 'dump') {
     $db->export_font($name, $out) or die "no such font: $name\n";
     print "wrote $out\n";
 }
+elsif ($cmd eq 'preview') {
+    my $name = shift @ARGV or die "preview: font name required\n";
+    my $out  = shift @ARGV or die "preview: output path required\n";
+    my $pdf  = $db->get_preview($name);
+    die "no preview stored for '$name' yet -- run examples/02 first to generate one\n"
+        unless defined $pdf && length $pdf;
+    open my $fh, '>:raw', $out or die "open $out: $!";
+    print $fh $pdf;
+    close $fh;
+    printf "wrote %s (%d bytes)\n", $out, length($pdf);
+}
+elsif ($cmd eq 'search') {
+    # Filters: --has-cyrillic, --has-latin, --has-greek, --format=ttf, --name=<substr>
+    my %f;
+    while (@ARGV) {
+        my $a = shift @ARGV;
+        if    ($a eq '--has-cyrillic') { $f{has_cyrillic} = 1 }
+        elsif ($a eq '--has-latin')    { $f{has_latin}    = 1 }
+        elsif ($a eq '--has-greek')    { $f{has_greek}    = 1 }
+        elsif ($a =~ /^--format=(.+)/) { $f{format}       = $1 }
+        elsif ($a =~ /^--name=(.+)/)   { $f{_name_like}   = $1 }
+        else { die "search: unknown arg '$a'\n" }
+    }
+    my @clauses; my @binds;
+    for my $k (qw(has_cyrillic has_latin has_greek format)) {
+        next unless exists $f{$k};
+        push @clauses, "$k = ?"; push @binds, $f{$k};
+    }
+    if (exists $f{_name_like}) {
+        push @clauses, "ps_font_name LIKE ?"; push @binds, "%$f{_name_like}%";
+    }
+    my $where = @clauses ? "WHERE " . join(" AND ", @clauses) : "";
+    my $rows = $db->dbh->selectall_arrayref(
+        "SELECT ps_font_name, family, format, encoding_class, has_cyrillic, has_latin, has_greek, glyph_count
+         FROM fonts $where ORDER BY ps_font_name", { Slice => {} }, @binds
+    );
+    printf "%-40s %-25s %-5s %-8s %s\n", "ps_font_name", "family", "fmt", "enc", "lat/cyr/gr glyphs";
+    print "-" x 110, "\n";
+    for my $r (@$rows) {
+        printf "%-40s %-25s %-5s %-8s %d/%d/%d   %d\n",
+            $r->{ps_font_name}//"", $r->{family}//"", $r->{format}//"",
+            $r->{encoding_class}//"",
+            $r->{has_latin}//0, $r->{has_cyrillic}//0, $r->{has_greek}//0,
+            $r->{glyph_count}//0;
+    }
+    printf "(%d fonts)\n", scalar @$rows;
+}
+elsif ($cmd eq 'slurp') {
+    my $dir = shift @ARGV or die "slurp: directory required\n";
+    my $t0 = time;
+    my $s = $db->import_dir($dir, verbose => 1);
+    printf "scanned=%d imported=%d skipped=%d failed=%d in %ds\n",
+        @{$s}{qw(scanned imported skipped failed)}, time - $t0;
+}
+elsif ($cmd eq 'classify') {
+    my $s = $db->classify_all(verbose => 1);
+    printf "scanned=%d updated=%d failed=%d\n",
+        @{$s}{qw(scanned updated failed)};
+}
 elsif ($cmd eq 'alias') {
     my $alias = shift @ARGV or die "alias: alias name required\n";
     my $name  = shift @ARGV or die "alias: target ps_font_name required\n";
@@ -110,6 +169,11 @@ Commands:
   show <name>                Show metadata for one font
   glyphs <name>              List default-encoding glyphs (slot + name)
   dump <name> <out>          Write the stored font binary back to a file
+  preview <name> <out>       Extract the cached preview PDF for a font
+  slurp <dir>                Bulk-import every PFB/PFA/TTF/OTF under <dir>
+  classify                   Re-run metadata extraction on slurped rows
+  search [--has-cyrillic] [--has-latin] [--has-greek] [--format=ttf] [--name=foo]
+                             Query the catalog
   alias <alias> <name>       Map a logical name to a real font
 
 Env:

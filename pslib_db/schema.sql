@@ -35,8 +35,12 @@ CREATE TABLE IF NOT EXISTS fonts (
     fontbbox_xmax     REAL,
     fontbbox_ymax     REAL,
     notes             TEXT,
-    -- Binary blob LAST so SELECT without "*" stays fast:
-    font_data         BLOB    NOT NULL
+    comment           TEXT,                       -- free-form user comment
+    metadata          TEXT,                       -- raw extracted metadata (PS header, FontInfo, copyright, creation date, ...)
+    preview_built_at  TEXT,
+    -- Binary blobs LAST so SELECT without "*" stays fast:
+    font_data         BLOB    NOT NULL,
+    preview_pdf       BLOB                          -- 1-page rendered preview (regenerated on demand)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fonts_ps_font_name

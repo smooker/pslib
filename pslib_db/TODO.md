@@ -5,38 +5,7 @@ demo. The list below tracks everything that must land before this becomes
 a viable replacement for `~/work/pslib/pslib.py` and the local
 PostScript::Simple patches.
 
-## P0 -- correctness bugs in the skeleton
-
-- [ ] **classify() encoding misclassification (EType-Normal -> "macroman")**
-      EType-Normal's default Encoding is effectively cp1251 (А..я sit in
-      slots 0xC0..0xFF), but the heuristic only flags it as MacRoman
-      because it sees `/Adieresis + /Aring + /ydieresis`. Need to look at
-      slots 0xC0..0xFF specifically: if any of the names there are
-      cyrillic letters (under any naming convention), encoding_class
-      should be `cp1251` (or `cp1251-like`), not `macroman`. Probably do
-      both heuristics and prefer cp1251 when slots 192..255 have
-      cyrillic-shaped glyph names.
-
-- [ ] **has_cyrillic = 0 for EType-Normal even though it renders cyrillic**
-      The flag only checks for `/afii10NNN` glyph names. EType uses bare
-      cyrillic names like `/A`, `/B` (overloaded with latin) AND/OR
-      direct mapping by slot. Improve detection by:
-        a) consulting an alias list (Wikipedia AGL aliases for cyrillic)
-        b) checking if rendering byte 0xC1 produces a non-zero-width
-           glyph that visually differs from latin /B
-      The `cyrillic_widths_ok` step from below will give us (b) for free.
-
 ## P0 -- next functional milestones
-
-- [ ] **cyrillic_widths_ok via gs stringwidth check**
-      For each candidate font, run a tiny gs subprocess that
-      `selectfont`s the embedded font, measures `stringwidth` for every
-      cp1251 byte 0xC0..0xFF, and confirms widths are non-zero AND not
-      identical to latin slots. Catches Helvetica/NimbusSans
-      counterfeit cyrillic (gs substitute font has AFII names with
-      zero widths -- silently broken in current pssimple_test.pdf).
-      Set `cyrillic_widths_ok = 1` only if all 64 cyrillic bytes have
-      sane widths.
 
 - [ ] **TTF / OTF metadata extraction**
       DejaVu, Liberation, Nimbus, URW shipped as `.ttf` are 90% of the

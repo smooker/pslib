@@ -93,17 +93,24 @@ print $ps "%%EndProlog\n";
 print $ps "%%Page: 1 1\n";
 
 # Title in Helvetica (gs builtin)
-print $ps "/Helvetica findfont 16 scalefont setfont\n";
-print $ps "50 800 moveto (pslib_db skeleton: $FONT pulled from SQLite) show\n";
+print $ps "/Helvetica-Bold findfont 16 scalefont setfont\n";
+printf $ps "50 800 moveto (%s) show\n", $FONT;
 
-print $ps "/Helvetica findfont 9 scalefont setfont\n";
+print $ps "/Helvetica findfont 10 scalefont setfont\n";
 my $size = length($row->{font_data});
-print $ps "50 780 moveto (font_data BLOB: $size bytes; format $row->{format}; encoding_class $row->{encoding_class}) show\n";
-print $ps "50 768 moveto (No FONTPATH, no on-disk PFB lookup. Renderer never sees the file.) show\n";
+my $orig = $row->{original_filename} // '<unknown>';
+my $fam  = $row->{family} // '';
+my $full = $row->{full_name} // '';
+my $sub  = $fam && $full ne $FONT ? "$fam -- $full" : ($fam || $full);
+printf $ps "50 786 moveto (%s) show\n", $sub if $sub;
+printf $ps "50 772 moveto (source: %s) show\n", $orig;
+printf $ps "50 760 moveto (font_data BLOB: %d bytes; format %s; encoding_class %s) show\n",
+    $size, $row->{format} // '?', $row->{encoding_class} // '?';
+print $ps "50 748 moveto (No FONTPATH lookup. Renderer pulled font from fonts.db SQLite catalog.) show\n";
 
 # Sample lines at multiple sizes
 my @sizes = (24, 18, 14, 12, 10);
-my $y = 720;
+my $y = 728;
 for my $sz (@sizes) {
     print $ps "/$FONT findfont $sz scalefont setfont\n";
     print $ps "50 $y moveto (${sz}pt: The quick brown fox jumps over the lazy dog) show\n";
@@ -141,10 +148,16 @@ for my $row_i (0..15) {
         print $ps "0.3 setlinewidth\n";
         printf $ps "newpath %g %g moveto %g 0 rlineto 0 %g rlineto %g 0 rlineto closepath stroke\n",
             $cx, $cy, $cell, $cell, -$cell;
-        # glyph at byte index
+        # baseline marker -- light gray horizontal at the y where the
+        # glyph's (0,0) origin sits. Lets you see ascender/descender
+        # geometry at a glance.
+        my $baseline = $cy + 4;
+        printf $ps "0.75 setgray 0.2 setlinewidth %g %g moveto %g %g lineto stroke 0 setgray\n",
+            $cx + 1, $baseline, $cx + $cell - 1, $baseline;
+        # glyph at byte index, sitting on the baseline
         printf $ps "/$FONT findfont %g scalefont setfont\n", $glyph_sz;
         printf $ps "%g %g moveto (\\%03o) show\n",
-            $cx + 4, $cy + 4, $byte;
+            $cx + 4, $baseline, $byte;
     }
 }
 
@@ -159,7 +172,15 @@ system('ps2pdf', $OUT_PS, $OUT_PDF) == 0
     or die "ps2pdf failed: $?\n";
 print "Wrote $OUT_PDF (", -s $OUT_PDF, " bytes)\n";
 
-# -- 5. confirm bump_use worked -------------------------------------
+# -- 5. cache the rendered preview PDF inside the font row ----------
+open my $pfh, '<:raw', $OUT_PDF or die "open $OUT_PDF: $!";
+local $/;
+my $pdf_blob = <$pfh>;
+close $pfh;
+my $stored = $db->save_preview($FONT, $pdf_blob);
+printf "Stored preview_pdf in DB: %d bytes\n", $stored;
+
+# -- 6. confirm bump_use worked -------------------------------------
 my $r2 = $db->get_font($FONT);
-printf "After render: use_count=%d, last_used_at=%s\n",
-    $r2->{use_count}, $r2->{last_used_at};
+printf "After render: use_count=%d, last_used_at=%s, preview_built_at=%s\n",
+    $r2->{use_count}, $r2->{last_used_at}, $r2->{preview_built_at} // '?';

@@ -55,8 +55,30 @@ sub new {
 
     if ($is_new) {
         $self->_apply_schema;
+    } else {
+        $self->_migrate;
     }
     return $self;
+}
+
+# Idempotent schema migration: add columns that newer versions of the
+# code expect but older DBs may not have. SQLite ALTER TABLE ADD COLUMN
+# is cheap (metadata only) and tolerates being called every startup.
+sub _migrate {
+    my ($self) = @_;
+    my @cols = @{ $self->{dbh}->selectall_arrayref(
+        "PRAGMA table_info(fonts)", { Slice => {} }
+    ) };
+    my %have = map { $_->{name} => 1 } @cols;
+    my @add;
+    push @add, ["preview_pdf",      "BLOB"] unless $have{preview_pdf};
+    push @add, ["preview_built_at", "TEXT"] unless $have{preview_built_at};
+    push @add, ["comment",          "TEXT"] unless $have{comment};
+    push @add, ["metadata",         "TEXT"] unless $have{metadata};
+    for my $a (@add) {
+        my ($name, $type) = @$a;
+        $self->{dbh}->do("ALTER TABLE fonts ADD COLUMN $name $type");
+    }
 }
 
 sub dbh { $_[0]->{dbh} }
@@ -120,8 +142,8 @@ sub import_font {
     my $size = length $blob;
     my $orig = basename($source);
 
-    $self->{dbh}->do(
-        q{
+    require DBI;
+    my $sth = $self->{dbh}->prepare(q{
         INSERT INTO fonts (
             ps_font_name, family, full_name, weight, italic_angle,
             format, sha256, file_size, original_filename,
@@ -130,8 +152,8 @@ sub import_font {
             fontbbox_xmin, fontbbox_ymin, fontbbox_xmax, fontbbox_ymax,
             notes, font_data
         ) VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?,?,?, ?,?)
-        },
-        undef,
+    });
+    my @text_params = (
         $info->{ps_font_name}, $info->{family}, $info->{full_name},
         $info->{weight}, $info->{italic_angle},
         $info->{format}, $sha, $size, $orig,
@@ -141,8 +163,12 @@ sub import_font {
         $info->{fontbbox_xmin}, $info->{fontbbox_ymin},
         $info->{fontbbox_xmax}, $info->{fontbbox_ymax},
         $meta{notes},
-        $blob,  # BLOB last
     );
+    for my $i (0..$#text_params) {
+        $sth->bind_param($i + 1, $text_params[$i]);
+    }
+    $sth->bind_param(21, $blob, DBI::SQL_BLOB());
+    $sth->execute;
 
     my $id = $self->{dbh}->last_insert_id("", "", "fonts", "id");
 
@@ -203,8 +229,35 @@ sub classify {
         $ascii = join("", @parts);
     } elsif ($info{format} eq 'pfa') {
         $ascii = $blob;
+    } elsif ($info{format} eq 'ttf' || $info{format} eq 'otf') {
+        # Minimal sfnt parser: just enough to populate ps_font_name + family + full_name
+        # from the `name` table so import_font() can store the BLOB.
+        my %t = _sfnt_tables($blob);
+        if (my $nm = $t{name}) {
+            my %n = _sfnt_name_records($blob, $nm);
+            $info{ps_font_name} = $n{6};   # PostScript name
+            $info{family}       = $n{1};
+            $info{full_name}    = $n{4};
+            $info{weight}       = $n{2};
+        }
+        # Glyph count from maxp
+        if (my $mp = $t{maxp}) {
+            $info{glyph_count} = unpack('n', substr($blob, $mp->{offset} + 4, 2));
+        }
+        # Unicode coverage from cmap -- sets has_latin / has_cyrillic / has_greek
+        if (my $cm = $t{cmap}) {
+            my @ranges = _sfnt_cmap_ranges($blob, $cm);
+            for my $r (@ranges) {
+                my ($s, $e) = @$r;
+                $info{has_latin}    ||= ($s <= 0x005A && $e >= 0x0041);   # A..Z
+                $info{has_cyrillic} ||= ($s <= 0x044F && $e >= 0x0410);   # А..я
+                $info{has_greek}    ||= ($s <= 0x03A9 && $e >= 0x0391);   # Α..Ω
+            }
+        }
+        $info{encoding_class} = 'sfnt';
+        $ascii = '';
     } else {
-        $ascii = '';   # TODO: TTF/OTF metadata extraction
+        $ascii = '';
     }
 
     if ($ascii) {
@@ -310,6 +363,39 @@ sub bump_use {
     );
 }
 
+# -- Preview ---------------------------------------------------------
+
+# Save a 1-page preview PDF blob into the font row.
+# Caller renders the PDF however it likes and just hands us the bytes.
+# Uses explicit SQL_BLOB binding so DBD::SQLite does not try to UTF-8
+# encode the binary data (PDF contains lots of NUL and high bytes).
+sub save_preview {
+    my ($self, $name, $pdf_blob) = @_;
+    croak "save_preview: name + pdf bytes required" unless $name && defined $pdf_blob;
+    require DBI;
+    my $sth = $self->{dbh}->prepare(
+        "UPDATE fonts SET preview_pdf = ?, preview_built_at = datetime('now') WHERE ps_font_name = ?"
+    );
+    $sth->bind_param(1, $pdf_blob, DBI::SQL_BLOB());
+    $sth->bind_param(2, $name);
+    $sth->execute;
+    my ($len) = $self->{dbh}->selectrow_array(
+        "SELECT length(preview_pdf) FROM fonts WHERE ps_font_name = ?",
+        undef, $name
+    );
+    return $len;
+}
+
+# Pull the preview PDF blob back out (or undef if none stored yet).
+sub get_preview {
+    my ($self, $name) = @_;
+    my ($blob) = $self->{dbh}->selectrow_array(
+        "SELECT preview_pdf FROM fonts WHERE ps_font_name = ?",
+        undef, $name
+    );
+    return $blob;
+}
+
 # -- Export ----------------------------------------------------------
 
 sub export_font {
@@ -323,6 +409,211 @@ sub export_font {
     print $fh $row->{font_data};
     close $fh;
     return 1;
+}
+
+# -- Bulk import -----------------------------------------------------
+
+sub import_dir {
+    my ($self, $dir, %opts) = @_;
+    my @found;
+    require File::Find;
+    File::Find::find(sub {
+        return unless -f $_;
+        return unless /\.(pfb|pfa|ttf|otf)$/i;
+        push @found, $File::Find::name;
+    }, $dir);
+    my %stats = (scanned => scalar @found, imported => 0, skipped => 0, failed => 0);
+    # ps_font_name is also UNIQUE, but for raw slurp we use basename + sha8 suffix
+    # to guarantee uniqueness without an extra SELECT round-trip.
+    my $sth = $self->{dbh}->prepare(
+        "INSERT OR IGNORE INTO fonts
+            (ps_font_name, format, sha256, file_size, original_filename, font_data)
+         VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    $self->{dbh}->begin_work;
+    for my $f (@found) {
+        eval {
+            open my $fh, '<:raw', $f or die "open: $!";
+            local $/; my $blob = <$fh>; close $fh;
+            my $sha = sha256_hex($blob);
+            my $base = basename($f);
+            (my $name = $base) =~ s/\.(pfb|pfa|ttf|otf)$//i;
+            (my $fmt  = lc(($f =~ /\.(\w+)$/)[0] || 'unknown'));
+            # short sha8 suffix avoids ps_font_name collisions deterministically
+            my $ps_name = "${name}#" . substr($sha, 0, 8);
+            $sth->bind_param(1, $ps_name);
+            $sth->bind_param(2, $fmt);
+            $sth->bind_param(3, $sha);
+            $sth->bind_param(4, length($blob));
+            $sth->bind_param(5, $f);
+            $sth->bind_param(6, $blob, DBI::SQL_BLOB());
+            $sth->execute;
+            if ($sth->rows == 0) { $stats{skipped}++ } else { $stats{imported}++ }
+        };
+        if ($@) { $stats{failed}++; warn "  ! $f: $@" if $opts{verbose}; }
+    }
+    $self->{dbh}->commit;
+    return \%stats;
+}
+
+# -- Classify pass over already-stored rows --------------------------
+# After a bulk slurp the rows have only filename + sha. Walk them all,
+# extract real metadata from the BLOB, and UPDATE in place.
+
+sub classify_all {
+    my ($self, %opts) = @_;
+    my $rows = $self->{dbh}->selectall_arrayref(
+        "SELECT id, ps_font_name, format, original_filename, font_data
+         FROM fonts",
+        { Slice => {} }
+    );
+    my %stats = (scanned => scalar @$rows, updated => 0, failed => 0);
+    my $upd = $self->{dbh}->prepare(
+        "UPDATE fonts SET
+            ps_font_name = ?, family = ?, full_name = ?, weight = ?,
+            italic_angle = ?, encoding_class = ?,
+            has_cyrillic = ?, has_latin = ?, has_greek = ?,
+            glyph_count = ?,
+            fontbbox_xmin = ?, fontbbox_ymin = ?, fontbbox_xmax = ?, fontbbox_ymax = ?,
+            metadata = ?
+         WHERE id = ?"
+    );
+    $self->{dbh}->begin_work;
+    for my $r (@$rows) {
+        my $info = eval { $self->classify($r->{font_data}, $r->{original_filename}) };
+        if ($@ || !$info) {
+            $stats{failed}++;
+            warn "  ! id=$r->{id} $r->{original_filename}: $@" if $opts{verbose};
+            next;
+        }
+        # Build a small metadata dump for the new column
+        my $meta_text = join("\n",
+            "ps_font_name: " . ($info->{ps_font_name} // ''),
+            "family: "       . ($info->{family}       // ''),
+            "full_name: "    . ($info->{full_name}    // ''),
+            "weight: "       . ($info->{weight}       // ''),
+            "format: "       . ($info->{format}       // ''),
+            "encoding: "     . ($info->{encoding_class} // ''),
+            "glyphs: "       . ($info->{glyph_count}  // 0),
+            "source: "       . ($r->{original_filename} // ''),
+        );
+        # Keep collision-safe ps_font_name when classify gave us a real one
+        my $new_name = $info->{ps_font_name} // $r->{ps_font_name};
+        # If collision with another row, fall back to old slurp name
+        if ($new_name ne $r->{ps_font_name}) {
+            my ($busy) = $self->{dbh}->selectrow_array(
+                "SELECT 1 FROM fonts WHERE ps_font_name = ? AND id != ?",
+                undef, $new_name, $r->{id}
+            );
+            $new_name = $r->{ps_font_name} if $busy;
+        }
+        $upd->execute(
+            $new_name,
+            $info->{family},
+            $info->{full_name},
+            $info->{weight},
+            $info->{italic_angle},
+            $info->{encoding_class},
+            $info->{has_cyrillic},
+            $info->{has_latin},
+            $info->{has_greek},
+            $info->{glyph_count},
+            $info->{fontbbox_xmin}, $info->{fontbbox_ymin},
+            $info->{fontbbox_xmax}, $info->{fontbbox_ymax},
+            $meta_text,
+            $r->{id},
+        );
+        $stats{updated}++;
+    }
+    $self->{dbh}->commit;
+    return \%stats;
+}
+
+# -- Minimal sfnt (TTF/OTF) parser -----------------------------------
+# Just enough to extract `name` table records and glyph count.
+
+sub _sfnt_tables {
+    my ($blob) = @_;
+    return () if length($blob) < 12;
+    my $num = unpack('n', substr($blob, 4, 2));
+    my %t;
+    for my $i (0 .. $num - 1) {
+        my $rec = substr($blob, 12 + $i * 16, 16);
+        my ($tag, undef, $off, $len) = unpack('a4 N N N', $rec);
+        $t{$tag} = { offset => $off, length => $len };
+    }
+    return %t;
+}
+
+sub _sfnt_cmap_ranges {
+    my ($blob, $tab) = @_;
+    my $base = $tab->{offset};
+    return () if $base + 4 > length($blob);
+    my (undef, $num) = unpack('nn', substr($blob, $base, 4));
+    my @subs;
+    for my $i (0 .. $num - 1) {
+        my ($plat, $enc, $off) = unpack('nnN', substr($blob, $base + 4 + $i * 8, 8));
+        push @subs, { plat => $plat, enc => $enc, offset => $base + $off };
+    }
+    # Pick a Unicode-capable subtable: prefer (3,10) UCS4, then (3,1) UCS2, then (0,*).
+    my @prio = (
+        (grep { $_->{plat} == 3 && $_->{enc} == 10 } @subs),
+        (grep { $_->{plat} == 3 && $_->{enc} == 1  } @subs),
+        (grep { $_->{plat} == 0 } @subs),
+    );
+    return () unless @prio;
+    my $sub = $prio[0];
+    my $off = $sub->{offset};
+    my $fmt = unpack('n', substr($blob, $off, 2));
+    my @ranges;
+    if ($fmt == 4) {
+        my $segX2 = unpack('n', substr($blob, $off + 6, 2));
+        my $seg = $segX2 / 2;
+        my $end_off   = $off + 14;
+        my $start_off = $end_off + 2 + $segX2;   # +reservedPad
+        for my $i (0 .. $seg - 1) {
+            my $end   = unpack('n', substr($blob, $end_off   + $i * 2, 2));
+            my $start = unpack('n', substr($blob, $start_off + $i * 2, 2));
+            next if $start == 0xFFFF;   # sentinel
+            push @ranges, [$start, $end];
+        }
+    } elsif ($fmt == 12) {
+        my $ngroups = unpack('N', substr($blob, $off + 12, 4));
+        for my $i (0 .. $ngroups - 1) {
+            my ($s, $e) = unpack('NN', substr($blob, $off + 16 + $i * 12, 8));
+            push @ranges, [$s, $e];
+        }
+    }
+    return @ranges;
+}
+
+sub _sfnt_name_records {
+    my ($blob, $tab) = @_;
+    my $base = $tab->{offset};
+    return () if $base + 6 > length($blob);
+    my (undef, $count, $str_off) = unpack('nnn', substr($blob, $base, 6));
+    my $strings_base = $base + $str_off;
+    my %out;   # name_id => string (best candidate wins)
+    for my $i (0 .. $count - 1) {
+        my $rec = substr($blob, $base + 6 + $i * 12, 12);
+        my ($plat, $enc, $lang, $nid, $slen, $soff) = unpack('nnnnnn', $rec);
+        my $raw = substr($blob, $strings_base + $soff, $slen);
+        my $str;
+        if ($plat == 3 || ($plat == 0)) {
+            # UTF-16BE
+            $str = eval { require Encode; Encode::decode('UTF-16BE', $raw) } // $raw;
+        } else {
+            $str = $raw;
+        }
+        $str =~ s/\0//g;
+        # Prefer English (lang 0x0409 / 0) -- only overwrite if we don't have one yet,
+        # or if this is the english record
+        my $is_english = ($plat == 3 && $lang == 0x0409) || ($plat == 1 && $lang == 0) || ($plat == 0);
+        if (!exists $out{$nid} || $is_english) {
+            $out{$nid} = $str;
+        }
+    }
+    return %out;
 }
 
 1;
