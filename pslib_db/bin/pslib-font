@@ -1,0 +1,118 @@
+#!/usr/bin/perl
+# pslib-font -- CLI wrapper around Pslib::FontDB.
+#
+# Usage:
+#   pslib-font import <file> [--note "..."]
+#   pslib-font list
+#   pslib-font show <ps_font_name>
+#   pslib-font glyphs <ps_font_name>
+#   pslib-font dump <ps_font_name> <out_file>
+#   pslib-font alias <alias> <ps_font_name>
+#   pslib-font init                              -- create empty DB
+
+use strict;
+use warnings;
+use FindBin qw($Bin);
+use lib "$Bin/../lib";
+use Pslib::FontDB;
+
+my $DB_PATH = $ENV{PSLIB_FONTDB} || "$Bin/../fonts.db";
+
+my $cmd = shift @ARGV // 'help';
+my $db  = Pslib::FontDB->new($DB_PATH);
+
+if ($cmd eq 'init') {
+    print "DB at $DB_PATH ready (schema applied if new).\n";
+}
+elsif ($cmd eq 'import') {
+    my $file = shift @ARGV or die "import: file required\n";
+    my %opts;
+    while (my $arg = shift @ARGV) {
+        $opts{notes} = shift @ARGV if $arg eq '--note';
+    }
+    my $r = $db->import_font($file, %opts);
+    if ($r->{already_present}) {
+        printf "already in db: id=%d  %s\n", $r->{id}, $r->{ps_font_name};
+    } else {
+        printf "imported: id=%d  %s  (%s, enc=%s, cyr=%d, glyphs=%d)\n",
+            $r->{id}, $r->{ps_font_name},
+            $r->{format} // '?',
+            $r->{encoding_class} // '?',
+            $r->{has_cyrillic} // 0,
+            $r->{glyph_count} // 0;
+    }
+}
+elsif ($cmd eq 'list') {
+    my $rows = $db->list;
+    printf "%-4s %-30s %-7s %-10s %-3s %-3s %-7s %-19s\n",
+        'id', 'ps_font_name', 'format', 'encoding', 'cyr', 'lat', 'glyphs', 'added_at';
+    print '-' x 90, "\n";
+    for my $f (@$rows) {
+        printf "%-4d %-30s %-7s %-10s %-3d %-3d %-7d %-19s\n",
+            $f->{id},
+            $f->{ps_font_name} // '?',
+            $f->{format}       // '?',
+            $f->{encoding_class} // '?',
+            $f->{has_cyrillic} // 0,
+            $f->{has_latin}    // 0,
+            $f->{glyph_count}  // 0,
+            $f->{added_at}     // '?';
+    }
+    printf "\n%d font(s)\n", scalar @$rows;
+}
+elsif ($cmd eq 'show') {
+    my $name = shift @ARGV or die "show: font name required\n";
+    my $row = $db->get_font($name);
+    die "no such font: $name\n" unless $row;
+    for my $k (sort keys %$row) {
+        next if $k eq 'font_data';   # don't dump the BLOB
+        my $v = $row->{$k} // '';
+        $v = '<undef>' if !length $v;
+        printf "%-22s : %s\n", $k, $v;
+    }
+    printf "%-22s : %d bytes\n", 'font_data', length($row->{font_data});
+}
+elsif ($cmd eq 'glyphs') {
+    my $name = shift @ARGV or die "glyphs: font name required\n";
+    my $row = $db->get_font($name);
+    die "no such font: $name\n" unless $row;
+    my $rows = $db->dbh->selectall_arrayref(
+        "SELECT slot, glyph_name FROM glyphs WHERE font_id = ? ORDER BY slot, glyph_name",
+        { Slice => {} }, $row->{id}
+    );
+    for my $g (@$rows) {
+        printf "  %3s  /%s\n",
+            (defined $g->{slot} ? sprintf("%3d", $g->{slot}) : ' - '),
+            $g->{glyph_name};
+    }
+    printf "\n%d glyphs\n", scalar @$rows;
+}
+elsif ($cmd eq 'dump') {
+    my $name = shift @ARGV or die "dump: font name required\n";
+    my $out  = shift @ARGV or die "dump: output path required\n";
+    $db->export_font($name, $out) or die "no such font: $name\n";
+    print "wrote $out\n";
+}
+elsif ($cmd eq 'alias') {
+    my $alias = shift @ARGV or die "alias: alias name required\n";
+    my $name  = shift @ARGV or die "alias: target ps_font_name required\n";
+    $db->set_alias($alias, $name);
+    print "aliased $alias -> $name\n";
+}
+else {
+    print <<'USAGE';
+pslib-font -- SQLite-backed PostScript font registry CLI
+
+Commands:
+  init                       Create empty database (default at fonts.db)
+  import <file> [--note S]   Import a PFB/PFA/TTF/OTF file
+  list                       List all known fonts
+  show <name>                Show metadata for one font
+  glyphs <name>              List default-encoding glyphs (slot + name)
+  dump <name> <out>          Write the stored font binary back to a file
+  alias <alias> <name>       Map a logical name to a real font
+
+Env:
+  PSLIB_FONTDB    path to fonts.db (default: ../fonts.db relative to script)
+USAGE
+}
