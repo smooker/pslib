@@ -13,7 +13,7 @@ unlink $DB;   # demo: start fresh every time
 my $db = Pslib::FontDB->new($DB);
 
 my @CANDIDATES = (
-    "$Bin/../../smookerps/fonts/EType-Normal.pfb",
+    "$Bin/../fonts/EType-Normal.pfb",
     "/usr/share/fonts/urw-fonts/NimbusSans-Regular.t1",
     "/usr/share/fonts/urw-fonts/NimbusSans-Regular.pfb",
     "/usr/share/fonts/urw-fonts/NimbusRoman-Regular.t1",
