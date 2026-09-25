@@ -54,7 +54,14 @@ class PSDoc:
     # ── Font ──────────────────────────────────────────────────────
 
     def register_font(self, name, ttf_path):
-        """Register a TTF font file for embedding."""
+        """Register a TTF/OTF/PFB font file for embedding.
+
+        After registering, the font can be used with self.font(name, size).
+        For cyrillic support, the font must contain afii10017..afii10097
+        glyph names (DejaVu, Liberation, Nimbus, etc — most modern fonts).
+        Set cyrillic=False on font() to skip CP1251 re-encoding for fonts
+        that have only latin / MacRoman glyph names (e.g. old EType-Normal).
+        """
         self._font_paths[name] = ttf_path
 
     def font(self, name, size, cyrillic=True):
@@ -62,7 +69,10 @@ class PSDoc:
         self._current_font = name
         self._current_size = size
         self._fonts_used.add(name)
-        if cyrillic and name in self.CYRILLIC_FONTS:
+        # Apply CP1251 re-encoding to:
+        #   - the 9 standard PS Type 1 fonts (always have AFII glyphs)
+        #   - any font registered via register_font() when cyrillic=True
+        if cyrillic and (name in self.CYRILLIC_FONTS or name in self._font_paths):
             safe = name.replace("-", "_")
             self._cmd(f"/{safe}_Cyr {size} selectfont")
         else:
@@ -88,7 +98,7 @@ class PSDoc:
         if key in self._metrics:
             return self._metrics[key]
 
-        if font_name in self.CYRILLIC_FONTS:
+        if font_name in self.CYRILLIC_FONTS or font_name in self._font_paths:
             ps_font = font_name.replace("-", "_") + "_Cyr"
         else:
             ps_font = font_name
@@ -96,6 +106,9 @@ class PSDoc:
         # Build PS program: re-encode fonts, select font, measure all 256 chars
         ps = self.CP1251_REENCODE + "\n"
         for base in self.CYRILLIC_FONTS:
+            safe = base.replace("-", "_")
+            ps += f"/{safe}_Cyr /{base} ReEncodeFont\n"
+        for base in self._font_paths.keys():
             safe = base.replace("-", "_")
             ps += f"/{safe}_Cyr /{base} ReEncodeFont\n"
         ps += f"/{ps_font} {size} selectfont\n"
@@ -144,11 +157,15 @@ class PSDoc:
     def line(self, x1, y1, x2, y2, width=0.5):
         self._cmd(f"{width} setlinewidth {x1} {y1} moveto {x2} {y2} lineto stroke")
 
-    def rect(self, x, y, w, h, fill=False, gray=0.92, stroke=True, linewidth=0.5):
+    def rect(self, x, y, w, h, fill=False, gray=0.92, stroke=True, linewidth=0.5, rgb=None):
         self._cmd(f"{linewidth} setlinewidth")
         self._cmd(f"newpath {x} {y} moveto {w} 0 rlineto 0 {h} rlineto {w} neg 0 rlineto closepath")
         if fill:
-            self._cmd(f"gsave {gray} setgray fill grestore")
+            if rgb is not None:
+                r, g, b = rgb
+                self._cmd(f"gsave {r} {g} {b} setrgbcolor fill grestore")
+            else:
+                self._cmd(f"gsave {gray} setgray fill grestore")
         if stroke:
             self._cmd("stroke")
 
@@ -585,6 +602,12 @@ def
             for base in self.CYRILLIC_FONTS:
                 safe = base.replace("-", "_")
                 f.write(f"/{safe}_Cyr /{base} ReEncodeFont\n".encode("latin-1"))
+            # Also re-encode any registered TTF/OTF/PFB fonts so they can be
+            # used with cyrillic CP1251 byte stream just like Type 1.
+            # Skipped silently if the font lacks afii glyphs (gs warning only).
+            for base in self._font_paths.keys():
+                safe = base.replace("-", "_")
+                f.write(f"/{safe}_Cyr /{base} ReEncodeFont\n".encode("latin-1"))
             f.write(b"\n")
 
             # Pages
@@ -631,9 +654,12 @@ def
             cmd.append(f"-sFONTPATH={':'.join(fpaths)}")
         cmd.append(self.filename)
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # bytes, not text=True: gs echoes raw EPS/DSC fragments in warnings,
+        # which are not valid UTF-8 and would crash the decode
+        result = subprocess.run(cmd, capture_output=True)
         if result.returncode != 0:
-            raise RuntimeError(f"gs failed: {result.stderr}")
+            err = result.stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(f"gs failed: {err}")
         return pdf_path
 
 

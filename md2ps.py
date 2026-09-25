@@ -76,10 +76,12 @@ class MdConfig:
         self.table_body_size = 7
 
         # Spacing
-        self.line_height = 11
+        self.line_height = 13
         self.code_line_height = 9
         self.section_gap = 6
         self.subsection_gap = 4
+        self.para_gap = 4               # extra space after a paragraph / bullet / numbered item
+        self.para_indent = 14           # first-line indent (≈ 1.5em)
 
         # Fonts
         self.body_font = "Helvetica"
@@ -89,6 +91,11 @@ class MdConfig:
         # Code blocks
         self.code_bg_gray = 0.94
         self.code_max_chars = 90
+
+        # Heading colours (RGB 0..1) -- navy by default to match official BG legal docs
+        self.h2_bg_rgb     = (0.016, 0.231, 0.529)   # #043b87
+        self.h2_text_rgb   = (1.0,   1.0,   1.0)     # white on navy
+        self.h_text_rgb    = (0.016, 0.231, 0.529)   # h3/h4 navy text
 
         # Orphan prevention (min lines after heading)
         self.h2_min_lines = 6
@@ -118,11 +125,18 @@ class MdConfig:
 # ============================================================================
 
 def clean_md(text):
-    """Remove markdown bold/italic/code/strikethrough markers."""
+    """Remove markdown bold/italic/code/strikethrough markers and link syntax."""
+    # Links: [label](url) -> label
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # Bold / italic / code / strike
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    text = re.sub(r'_(.+?)_', r'\1', text)
     text = re.sub(r'`(.+?)`', r'\1', text)
     text = re.sub(r'~~(.+?)~~', r'\1', text)
+    # Stray escape backslashes left by html2text (e.g. "1\." -> "1.")
+    text = re.sub(r'\\([.\-_*\[\](){}#+!])', r'\1', text)
     return text
 
 
@@ -213,31 +227,38 @@ def measure_block(block, doc, cfg):
     cw = cfg.content_width
 
     if kind == 'title':
-        return cfg.title_size + 4 + 10 + 12 + cfg.section_gap + 8
+        return cfg.title_size + 6 + cfg.section_gap + cfg.line_height + 8
 
     if kind == 'h2':
-        return cfg.section_gap + cfg.h2_size + 6 + 10
+        doc.font(cfg.bold_font, cfg.h2_size)
+        full_w = doc.A4W - cfg.margin_right - cfg.margin_left
+        n = len(doc._wrap_text(clean_md(block.content), full_w - 12))
+        return cfg.section_gap + (cfg.h2_size + 4) * n + 6 + 10
 
     if kind == 'h3':
-        return cfg.line_height + cfg.h3_size + 1
+        doc.font(cfg.bold_font, cfg.h3_size)
+        n = len(doc._wrap_text(clean_md(block.content), cw - 5))
+        return cfg.line_height + n * (cfg.h3_size + 2) + 3 + cfg.line_height
 
     if kind == 'h4':
-        return 3 + cfg.h4_size + 2
+        doc.font(cfg.bold_font, cfg.h4_size)
+        n = len(doc._wrap_text(clean_md(block.content), cw - 10))
+        return int(cfg.line_height * 0.7) + n * (cfg.h4_size + 2) + 3 + cfg.line_height
 
     if kind == 'text':
         doc.font(cfg.body_font, cfg.body_size)
         lines = doc._wrap_text(clean_md(block.content), cw)
-        return cfg.line_height * len(lines)
+        return cfg.line_height * len(lines) + cfg.para_gap
 
     if kind == 'bullet':
         doc.font(cfg.body_font, cfg.bullet_size)
         lines = doc._wrap_text(clean_md(block.content), cw - 12)
-        return cfg.line_height * len(lines)
+        return cfg.line_height * len(lines) + cfg.para_gap
 
     if kind == 'numbered':
         doc.font(cfg.body_font, cfg.bullet_size)
         lines = doc._wrap_text(clean_md(block.content[1]), cw - 20)
-        return cfg.line_height * len(lines)
+        return cfg.line_height * len(lines) + cfg.para_gap
 
     if kind == 'code':
         n = len(block.content)
@@ -248,7 +269,7 @@ def measure_block(block, doc, cfg):
         return 4 + 14 + 13 * len(rows) + 6  # header + rows + gap
 
     if kind == 'hr':
-        return 2
+        return 2 + cfg.subsection_gap * 2  # breathing room above + below the line
 
     if kind == 'blank':
         return 1
@@ -337,7 +358,10 @@ def render_block(block, doc, cfg, x, y, content_w, section_num=0):
     if kind == 'table':
         return _render_table(block, doc, cfg, x, y, content_w)
     if kind == 'hr':
-        return y - 2
+        y -= cfg.subsection_gap          # space ABOVE the line
+        doc.hr(y, x, x + content_w)
+        y -= 2 + cfg.subsection_gap      # line itself + space below
+        return y
     if kind == 'blank':
         return y - 1
     return y
@@ -346,15 +370,9 @@ def render_block(block, doc, cfg, x, y, content_w, section_num=0):
 def _render_title(block, doc, cfg, x, y, cw):
     doc.font(cfg.bold_font, cfg.title_size)
     doc.text(doc.A4W / 2, y, clean_md(block.content), align="center")
-    y -= cfg.title_size + 4
-    doc.font(cfg.body_font, 8)
-    doc.text(doc.A4W / 2, y, "LZ1CCM / smooker / SCteam", align="center")
-    y -= 10
-    doc.font(cfg.body_font, 7)
-    doc.text(doc.A4W / 2, y, datetime.now().strftime("%Y-%m-%dT%H:%M"), align="center")
-    y -= 12
+    y -= cfg.title_size + 6
     doc.hr(y, x, doc.A4W - cfg.margin_right)
-    y -= cfg.section_gap
+    y -= cfg.section_gap + cfg.line_height   # breathing room below title rule
     return y
 
 
@@ -362,45 +380,74 @@ def _render_h2(block, doc, cfg, x, y, cw, section_num):
     y -= cfg.section_gap
     doc.font(cfg.bold_font, cfg.h2_size)
     label = f"{section_num:02d}  {clean_md(block.content)}"
-    tw = doc.string_width(label)
-    box_h = cfg.h2_size + 6
+    full_w = doc.A4W - cfg.margin_right - x
+    lines = doc._wrap_text(label, full_w - 12)
+    line_h = cfg.h2_size + 4
+    box_h = line_h * len(lines) + 6
     box_y = y - box_h
-    line_y = box_y + box_h / 2
-    # Line across full width
-    doc.hr(line_y, x, doc.A4W - cfg.margin_right)
-    # Light gray box behind text (same as code block bg)
-    doc.rect(x, box_y, tw + 8, box_h, fill=True, gray=cfg.code_bg_gray, stroke=False)
-    # Black border
-    doc.rect(x, box_y, tw + 8, box_h, fill=False, gray=0, stroke=True, linewidth=0.5)
-    doc.setgray(0)
-    # Text centered in box
+    if box_y < cfg.margin_bottom:
+        sys.stderr.write(f"[md2ps] WARN: h2 '{label[:50]}...' overflows printable area\n")
+    # Navy filled box (full content width)
+    doc.rect(x, box_y, full_w, box_h, fill=True, rgb=cfg.h2_bg_rgb, stroke=False)
+    doc.rect(x, box_y, full_w, box_h, fill=False, gray=0, stroke=True, linewidth=0.5)
+    r, g, b = cfg.h2_text_rgb
+    doc.setcolor(r, g, b)
     doc.font(cfg.bold_font, cfg.h2_size)
-    text_y = box_y + (box_h - cfg.h2_size) / 2 + cfg.h2_size * 0.2
-    doc.text(x + 4, text_y, label)
+    ty = box_y + box_h - line_h + cfg.h2_size * 0.2
+    for line in lines:
+        doc.text(x + 6, ty, line)
+        ty -= line_h
+    doc.setgray(0)
     return box_y - 10
 
 
 def _render_h3(block, doc, cfg, x, y, cw):
     y -= cfg.line_height  # space BEFORE h3 (separate from previous content)
     doc.font(cfg.bold_font, cfg.h3_size)
-    doc.text(x + 5, y, clean_md(block.content))
-    return y - cfg.h3_size - 1  # tight to own content
+    label = clean_md(block.content)
+    r, g, b = cfg.h_text_rgb
+    doc.setcolor(r, g, b)
+    lines = doc._wrap_text(label, cw - 5)
+    last_baseline = y
+    for line in lines:
+        doc.text(x + 5, y, line)
+        last_baseline = y
+        y -= cfg.h3_size + 2
+    underline_y = last_baseline - 3
+    doc.hr(underline_y, x + 5, doc.A4W - cfg.margin_right)
+    doc.setgray(0)
+    return underline_y - cfg.line_height
 
 
 def _render_h4(block, doc, cfg, x, y, cw):
     y -= cfg.line_height * 0.7  # space before h4
     doc.font(cfg.bold_font, cfg.h4_size)
-    doc.text(x + 10, y, clean_md(block.content))
-    return y - cfg.h4_size - 2
+    label = clean_md(block.content)
+    r, g, b = cfg.h_text_rgb
+    doc.setcolor(r, g, b)
+    lines = doc._wrap_text(label, cw - 10)
+    last_baseline = y
+    for line in lines:
+        doc.text(x + 10, y, line)
+        last_baseline = y
+        y -= cfg.h4_size + 2
+    underline_y = last_baseline - 3
+    doc.hr(underline_y, x + 10, doc.A4W - cfg.margin_right)
+    doc.setgray(0)
+    return underline_y - cfg.line_height
 
 
 def _render_text(block, doc, cfg, x, y, cw):
     doc.font(cfg.body_font, cfg.body_size)
     text = clean_md(block.content)
-    for line in doc._wrap_text(text, cw):
-        doc.text(x, y, line)
+    lines = doc._wrap_text(text, cw - cfg.para_indent)  # narrower for first line
+    for i, line in enumerate(lines):
+        if i == 0:
+            doc.text(x + cfg.para_indent, y, line)
+        else:
+            doc.text(x, y, line)
         y -= cfg.line_height
-    return y
+    return y - cfg.para_gap
 
 
 def _render_bullet(block, doc, cfg, x, y, cw):
@@ -412,7 +459,7 @@ def _render_bullet(block, doc, cfg, x, y, cw):
     for extra in lines[1:]:
         doc.text(x + 14, y, extra)
         y -= cfg.line_height
-    return y
+    return y - cfg.para_gap
 
 
 def _render_numbered(block, doc, cfg, x, y, cw):
@@ -427,7 +474,7 @@ def _render_numbered(block, doc, cfg, x, y, cw):
     for extra in lines[1:]:
         doc.text(x + 18, y, extra)
         y -= cfg.line_height
-    return y
+    return y - cfg.para_gap
 
 
 def _render_code(block, doc, cfg, x, y, cw):
