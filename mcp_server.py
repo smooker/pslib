@@ -122,9 +122,9 @@ def tool_md_to_pdf(args):
     out = safe_out_path(args.get("output_name"), ".pdf")
     cfg = MdConfig(**{k: v for k, v in (args.get("config") or {}).items()
                       if hasattr(MdConfig(), k)})
-    overlays = args.get("overlays")          # None -> footer + QR defaults
+    overlays = args.get("overlays")          # None -> footer + QR + logo defaults
     if overlays is not None and not isinstance(overlays, list):
-        raise ToolError("overlays must be a list of {type: watermark|footer|qr, ...}")
+        raise ToolError("overlays must be a list of {type: watermark|footer|qr|logo, ...}")
     title = args.get("title") or "Document"
     md_to_pdf(md, out, cfg=cfg, overlays=overlays, title=title)
     return pdf_result(out)
@@ -223,8 +223,10 @@ TOOLS = [
         "name": "md_to_pdf",
         "description": "Render markdown (title, ##/###/#### headings, paragraphs, bullets, "
                        "numbered lists, code blocks, pipe tables) to an A4 PDF with cyrillic "
-                       "support. Default overlays: footer with timestamp and page numbers, "
-                       "per-page QR with an RSC code. Returns the PDF inline.",
+                       "support. A leading # title sits in the header band beside the logo "
+                       "and QR. Default overlays: footer with timestamp and page numbers, "
+                       "per-page QR with an RSC code, per-page vector SC logo top-left. "
+                       "Returns the PDF inline.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -232,7 +234,7 @@ TOOLS = [
                 "output_name": {"type": "string", "description": "file name under the out dir, .pdf added"},
                 "title": {"type": "string"},
                 "config": {"type": "object", "description": "MdConfig overrides, e.g. body_size, margin_left"},
-                "overlays": {"type": "array", "description": "[] for none; items {type: watermark|footer|qr, ...}",
+                "overlays": {"type": "array", "description": "[] for none; items {type: watermark|footer|qr|logo, ...}",
                              "items": {"type": "object"}},
             },
             "required": ["markdown"],

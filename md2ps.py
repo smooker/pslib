@@ -57,11 +57,12 @@ class MdConfig:
 
     def __init__(self, **kw):
         # Margins (points)
-        self.margin_left = 42     # 15mm (binding)
-        self.margin_right = 23    # 8mm
-        self.margin_top = 36      # 12.7mm (gripper)
-        self.margin_bottom = 36   # 12.7mm (gripper)
+        self.margin_left = 57     # 20mm (binding)
+        self.margin_right = 28    # 10mm
+        self.margin_top = 28      # 10mm
+        self.margin_bottom = 28   # 10mm
         self.qr_zone = 60
+        self.header_h = 45        # band under margin_top: logo, title, QR (QR is 25 x 1.8)
         self.footer_h = 20
 
         # Font sizes
@@ -92,10 +93,12 @@ class MdConfig:
         self.code_bg_gray = 0.94
         self.code_max_chars = 90
 
-        # Heading colours (RGB 0..1) -- navy by default to match official BG legal docs
-        self.h2_bg_rgb     = (0.016, 0.231, 0.529)   # #043b87
-        self.h2_text_rgb   = (1.0,   1.0,   1.0)     # white on navy
-        self.h_text_rgb    = (0.016, 0.231, 0.529)   # h3/h4 navy text
+        # Heading colours (RGB 0..1) -- the olive of the holong tech card
+        # (holong/tools/tech_card.py GREEN)
+        self.h2_bg_rgb     = (0.36, 0.42, 0.30)
+        self.h2_text_rgb   = (1.0,  1.0,  1.0)       # white on olive
+        self.h_text_rgb    = (0.36, 0.42, 0.30)      # h3/h4 olive text
+        self.table_header_rgb = (0.36, 0.42, 0.30)   # table header fill
 
         # Orphan prevention (min lines after heading)
         self.h2_min_lines = 6
@@ -376,6 +379,28 @@ def _render_title(block, doc, cfg, x, y, cw):
     return y
 
 
+def _render_header_title(block, doc, cfg):
+    """The document title, in the header band between the logo and the QR,
+    centred on the band. Shrinks to fit rather than running into either."""
+    label = clean_md(block.content)
+    band_top = doc.A4H - cfg.margin_top
+    band_mid = band_top - cfg.header_h / 2
+    # Room on each side of the page centre: the logo on the left; the QR
+    # and its RSC/date labels (~60pt of Courier 6) on the right.
+    left_room = doc.A4W / 2 - (cfg.margin_left + cfg.header_h + 10)
+    right_room = (doc.A4W - cfg.margin_right - cfg.header_h - 5 - 60 - 10) - doc.A4W / 2
+    max_w = 2 * min(left_room, right_room)
+    size = cfg.title_size
+    doc.font(cfg.bold_font, size)
+    while size > 9 and doc.string_width(label) > max_w:
+        size -= 0.5
+        doc.font(cfg.bold_font, size)
+    doc.text(doc.A4W / 2, band_mid - size * 0.72 / 2, label, align="center")
+    rule_y = band_top - cfg.header_h - 6
+    doc.hr(rule_y, cfg.margin_left, doc.A4W - cfg.margin_right)
+    return rule_y - cfg.line_height          # first body baseline below the rule
+
+
 def _render_h2(block, doc, cfg, x, y, cw, section_num):
     y -= cfg.section_gap
     doc.font(cfg.bold_font, cfg.h2_size)
@@ -387,13 +412,16 @@ def _render_h2(block, doc, cfg, x, y, cw, section_num):
     box_y = y - box_h
     if box_y < cfg.margin_bottom:
         sys.stderr.write(f"[md2ps] WARN: h2 '{label[:50]}...' overflows printable area\n")
-    # Navy filled box (full content width)
+    # Filled box, full content width, no outline
     doc.rect(x, box_y, full_w, box_h, fill=True, rgb=cfg.h2_bg_rgb, stroke=False)
-    doc.rect(x, box_y, full_w, box_h, fill=False, gray=0, stroke=True, linewidth=0.5)
     r, g, b = cfg.h2_text_rgb
     doc.setcolor(r, g, b)
     doc.font(cfg.bold_font, cfg.h2_size)
-    ty = box_y + box_h - line_h + cfg.h2_size * 0.2
+    # Centre the text block vertically: cap height (Helvetica 718/1000 em)
+    # is what the eye sees, so centre that, not the em box.
+    cap_h = cfg.h2_size * 0.72
+    block_h = line_h * (len(lines) - 1) + cap_h
+    ty = box_y + (box_h - block_h) / 2 + line_h * (len(lines) - 1)
     for line in lines:
         doc.text(x + 6, ty, line)
         ty -= line_h
@@ -502,7 +530,8 @@ def _render_table(block, doc, cfg, x, y, cw):
                   header_size=cfg.table_header_size,
                   body_size=cfg.table_body_size,
                   row_height=13,
-                  col_align=["left"] * len(headers))
+                  col_align=["left"] * len(headers),
+                  header_rgb=cfg.table_header_rgb)
     return y - 6
 
 
@@ -548,6 +577,46 @@ def apply_overlays(doc, cfg, overlays):
                 _overlay_footer(doc, cfg, cmds, pg_idx, total_pages, ov)
             elif ov['type'] == 'qr':
                 _overlay_qr(doc, cfg, cmds, pg_idx, ov)
+            elif ov['type'] == 'logo':
+                _overlay_logo(doc, cfg, cmds, ov)
+
+
+# The SC team mark: an S (green) woven through a C (blue), three stroked
+# cubic paths. Taken verbatim from https://ntr.smooker.org/favicon.svg
+# (the same mark as /cs-logo.svg there, without its dark card and text).
+# SVG user space, y down; viewBox 60 35 210 240.
+_LOGO_VIEWBOX = (60, 35, 210, 240)
+_LOGO_STROKE = 24
+_LOGO_GREEN = (106 / 255, 153 / 255, 85 / 255)    # #6A9955
+_LOGO_BLUE = (125 / 255, 184 / 255, 224 / 255)    # #7DB8E0
+_LOGO_PATHS = [   # drawn in order: S tail behind C, C, S top in front
+    (_LOGO_GREEN, "250 178 moveto 260 210 245 240 215 250 curveto "
+                  "185 260 150 255 135 242 curveto"),
+    (_LOGO_BLUE,  "260 160 moveto 260 220 215 260 160 260 curveto "
+                  "105 260 70 225 70 185 curveto 70 145 105 112 160 112 curveto "
+                  "195 112 218 125 232 142 curveto"),
+    (_LOGO_GREEN, "225 45 moveto 180 45 140 65 140 95 curveto "
+                  "140 125 170 138 200 148 curveto 230 158 248 168 250 178 curveto"),
+]
+
+
+def _overlay_logo(doc, cfg, cmds, ov):
+    """SC team logo, top-left, fitted into a size x size box. Pure vector:
+    the SVG paths are replayed as PostScript curves, nothing rasterised."""
+    s = ov.get('size', cfg.header_h)
+    vx, vy, vw, vh = _LOGO_VIEWBOX
+    k = s / max(vw, vh)
+    tx = cfg.margin_left + (s - vw * k) / 2
+    ty = doc.A4H - cfg.margin_top - (s - vh * k) / 2
+    cmds.extend([
+        "gsave",
+        # SVG y-down user space onto the page: flip y, then shift the viewBox origin
+        f"{tx} {ty} translate {k} {-k} scale {-vx} {-vy} translate",
+        f"1 setlinecap 1 setlinejoin {_LOGO_STROKE} setlinewidth",
+    ])
+    for (r, g, b), path in _LOGO_PATHS:
+        cmds.append(f"{r:.4f} {g:.4f} {b:.4f} setrgbcolor newpath {path} stroke")
+    cmds.append("grestore")
 
 
 def _overlay_watermark(doc, cfg, cmds, ov):
@@ -679,7 +748,17 @@ def md_to_pdf(md_text, output_path, cfg=None, overlays=None, title="Document"):
 
     page_h = cfg.content_top - cfg.bottom_limit
     skip_until = -1
+
+    # A leading `# title` goes into the header band, beside the logo and QR.
+    header_title = next((i for i, b in enumerate(blocks) if b.kind != 'blank'), None)
+    if header_title is not None and blocks[header_title].kind == 'title':
+        cy = min(cy, _render_header_title(blocks[header_title], doc, cfg))
+    else:
+        header_title = None
+
     for i, block in enumerate(blocks):
+        if i == header_title:
+            continue
         if block.kind == 'h2':
             section_num += 1
 
@@ -718,6 +797,7 @@ def md_to_pdf(md_text, output_path, cfg=None, overlays=None, title="Document"):
         overlays = [
             {'type': 'footer', 'timestamp': now.strftime("%Y-%m-%dT%H:%M:%S")},
             {'type': 'qr', 'rsc': rsc, 'date': now.strftime("%Y-%m-%dT%H:%M")},
+            {'type': 'logo'},
         ]
 
     apply_overlays(doc, cfg, overlays)

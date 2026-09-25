@@ -168,6 +168,10 @@ class PSDoc:
                 self._cmd(f"gsave {gray} setgray fill grestore")
         if stroke:
             self._cmd("stroke")
+        else:
+            # A fill inside gsave/grestore leaves the path current; drop it,
+            # or the next bare `moveto .. stroke` outlines this box too.
+            self._cmd("newpath")
 
     def setgray(self, gray):
         self._cmd(f"{gray} setgray")
@@ -181,8 +185,10 @@ class PSDoc:
     # ── Table ─────────────────────────────────────────────────────
 
     def table(self, x, y, headers, rows, col_widths=None, font_name=None,
-              header_size=9, body_size=8, row_height=14, col_align=None):
-        """Draw a table with word-wrapped cells, black header, page breaks."""
+              header_size=9, body_size=8, row_height=14, col_align=None,
+              header_rgb=None):
+        """Draw a table with word-wrapped cells, a filled header, page breaks.
+        header_rgb: (r, g, b) 0..1 for the header fill; None is black."""
         if font_name is None:
             font_name = self._current_font or "Helvetica"
         ncols = len(headers)
@@ -219,8 +225,14 @@ class PSDoc:
             else:
                 self.text(cx + 3, ty, txt)
 
+        if header_rgb is None:
+            header_fill = "0 setgray"
+        else:
+            hr, hg, hb = header_rgb
+            header_fill = f"{hr} {hg} {hb} setrgbcolor"
+
         def draw_header(cy):
-            """Black bg, white text, word-wrapped header."""
+            """Filled bg, white text, word-wrapped header."""
             self.font(font_name, header_size)
             hdr_lines = []
             max_hdr = 1
@@ -230,10 +242,10 @@ class PSDoc:
                 max_hdr = max(max_hdr, len(wrapped))
             hdr_h = row_height * max_hdr
 
-            # Black rectangle
+            # Header rectangle
             self._cmd(f"newpath {x} {cy - hdr_h} moveto {table_w} 0 rlineto "
                       f"0 {hdr_h} rlineto {table_w} neg 0 rlineto closepath")
-            self._cmd("gsave 0 setgray fill grestore")
+            self._cmd(f"gsave {header_fill} fill grestore newpath")
             self._cmd("1 setgray")
             self.font(font_name, header_size)
 
@@ -251,7 +263,7 @@ class PSDoc:
                 hcx += col_widths[sep]
                 self.line(hcx, cy - 1, hcx, cy - hdr_h + 1, 0.3)
 
-            # Black bounding box stroke on top — covers white artifacts at edges
+            # Outer edge, black like the body grid
             self._cmd("0 setgray")
             self._cmd(f"0.3 setlinewidth newpath {x} {cy - hdr_h} moveto "
                       f"{table_w} 0 rlineto 0 {hdr_h} rlineto "
