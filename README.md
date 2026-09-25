@@ -85,6 +85,32 @@ See [example.py](example.py) for a complete multi-page document with tables, tre
 - A4 = 595 x 842 points
 - 1 point = 1/72 inch = 0.353 mm
 
+## MCP server
+
+`mcp_server.py` exposes pslib to Claude Code (and any MCP client) as tools:
+`md_to_pdf`, `render_template`, `template_list`, `template_info`,
+`pdf_preview`, `measure_text`. Standard library only, plus `jinja2` for the
+markdown templates.
+
+Templates are code, not files: `templates.py` holds the registry (`report`,
+`protocol`, `tk_card` = a production technology card). A client names a
+template and sends data; the data is validated against the template's schema
+and the PDF comes back inline (base64 resource) and is written under the out
+dir (`--out-dir`, default `~/pslib-out`).
+
+```bash
+# local, one Claude Code session
+claude mcp add pslib -- /usr/bin/python3 /path/to/pslib/mcp_server.py
+
+# shared: one server on a host, clients connect over the VPN with a token
+echo "<random 32+ chars>" > ~/.pslib-mcp-token
+python3 mcp_server.py --http 192.0.2.10:7462
+claude mcp add --transport http pslib http://192.0.2.10:7462/mcp \
+    --header "Authorization: Bearer <token>"
+```
+
+Tests: `python3 tests/test_mcp.py` drives both transports end to end.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
